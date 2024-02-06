@@ -1,0 +1,182 @@
+#!/usr/bin/env node
+
+/**
+ * Module dependencies.
+ */
+
+ const debug = require('debug')('app:debug');
+ const http = require('http');
+ const cluster = require("cluster");
+ const app = require('../app');
+ const {Worker} = require("worker_threads");
+ let workers = [];
+ let numCores = require('os').cpus().length;
+ 
+ /**
+  * Setup number of worker processes to share port which will be defined while setting up server
+  */
+ const setupWorkerProcesses = () => {
+ 
+     // to read number of cores on system
+     console.log('Master cluster setting up ' + numCores + ' workers');
+ 
+     // iterate on number of cores need to be utilized by an application
+     // current example will utilize all of them
+     for (let i = 0; i < numCores; i++) {
+         // creating workers and pushing reference in an array
+         // these references can be used to receive messages from workers
+         workers.push(cluster.fork());
+ 
+         // to receive messages from worker process
+         workers[i].on('message', function (message) {
+             console.log(message);
+         });
+     }
+ 
+     // process is clustered on a core and process id is assigned
+     cluster.on('online', function (worker) {
+         console.log('Worker ' + worker.process.pid + ' is listening');
+     });
+ 
+     // if any of the worker process dies then start a new one by simply forking another one
+     cluster.on('exit', function (worker, code, signal) {
+         debug('Worker ' + worker.process.pid + ' died with code: ' + code + ', and signal: ' + signal);
+         // console.log('Starting a new worker');
+         // cluster.fork();
+         // workers.push(cluster.fork());
+         // to receive messages from worker process
+         workers[workers.length - 1].on('message', (message) => {
+             debug(message);
+         });
+     });
+ };
+ 
+ 
+ const setupExpress = () => {
+ 
+     /**
+      * Create HTTP server.
+      */
+ 
+     const server = http.createServer(app);
+     // require('../socket')(server);
+ 
+ 
+     /**
+      * Get port from environment and store in Express.
+      */
+ 
+ 
+     const port = normalizePort(process.env.PORT|| '3000');
+     app.set('port', port);
+ 
+     console.log("Starting", process.env.APP_NAME, port);
+ 
+     //print all config here
+     // debug("ENV", config);
+     /**
+      * Listen on provided port, on all networks interfaces.
+      */
+ 
+     server.listen(port);
+     server.on('error', (error) => {
+         onError(error, port);
+     });
+     server.on('listening', () => {
+         const addr = server.address();
+         const bind = typeof addr === 'string'
+             ? 'pipe ' + addr
+             : 'port ' + addr.port;
+         debug('Listening on ' + bind);
+     });
+ 
+     console.log(`Worker ${process.pid} started`);
+ };
+ 
+ /**
+  * setup Server
+  * @param isClusterRequired
+  */
+ const setupServer = (isClusterRequired) => {
+ 
+     // if it is a master process then call setting up worker process
+     // createCustomWorkers(1);
+     if (isClusterRequired && cluster.isMaster) {
+         setupWorkerProcesses();
+     } else {
+         // to setup server configurations and share port address for incoming requests
+         setupExpress();
+     }
+ };
+ 
+ /**
+  * Normalize a port into a number, string, or false.
+  */
+ 
+ function normalizePort(val) {
+     const port = parseInt(val, 10);
+ 
+     if (isNaN(port)) {
+         // named pipe
+         return val;
+     }
+ 
+     if (port >= 0) {
+         // port number
+         return port;
+     }
+ 
+     return false;
+ }
+ 
+ let createCustomWorkers = (worker = 1) => {
+     console.log(`========== Creating  ${worker} number of background threads/workers ===========`);
+     for(let i = 0; i < worker; i++){
+         (new Promise((resolve, reject) => {
+          //  const worker = new Worker("./workers/BackgroundService.js");
+             worker.on('message', resolve);
+             worker.on('error', (error) => {
+                console.log("An error Occurred", error);
+                 return reject(error);
+             });
+             worker.on('exit', (code) => {
+                 console.log("An Exit error occurred", code);
+                 if (code !== 0)
+                     return reject(new Error(`Worker stopped with exit code ${code}`));
+                 if(isProduction) return createCustomWorkers();
+             });
+ 
+         }))
+             .then(res => console.log("Worker Res", res))
+             .catch(err => console.log("Worker Error", err));
+     }
+ };
+ /**
+  * Event listener for HTTP server "error" event.
+  */
+ 
+ function onError(error, port) {
+     if (error.syscall !== 'listen') {
+         throw error;
+     }
+ 
+     const bind = typeof port === 'string'
+         ? 'Pipe ' + port
+         : 'Port ' + port;
+ 
+     // handle specific listen errors with friendly messages
+     switch (error.code) {
+         case 'EACCES':
+             console.error(bind + ' requires elevated privileges');
+             process.exit(1);
+             break;
+         case 'EADDRINUSE':
+             console.error(bind + ' is already in use');
+             process.exit(1);
+             break;
+         default:
+             throw error;
+     }
+ }
+ setupServer(false);
+ 
